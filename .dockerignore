@@ -1,0 +1,5 @@
+.venv
+.pgdata
+data
+.claude
+**/__pycache__

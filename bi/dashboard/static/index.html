@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Retail BI Platform</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"
+          integrity="sha512-CQBWl4fJHWbryGE+Pc7UAxWMUMNMWzWxF4SQo9CgkJIN1kx6djDQZjh3Y8SZ1d+6I+1zze6Z7kHXO7q3UyZAWw=="
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Retail BI Platform</h1>
+      <div class="sub">Raw sources → ETL → PostgreSQL star schema → mining models → this dashboard</div>
+    </div>
+    <div class="spacer"></div>
+    <span class="pill" id="etl-status"><span class="dot"></span>loading…</span>
+    <button class="icon" id="theme-toggle" type="button">Theme</button>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="overview" aria-selected="true">Sales overview</button>
+    <button role="tab" data-tab="customers" aria-selected="false">Customer segments</button>
+    <button role="tab" data-tab="forecast" aria-selected="false">Forecast</button>
+    <button role="tab" data-tab="basket" aria-selected="false">Market basket</button>
+    <button role="tab" data-tab="pipeline" aria-selected="false">Data pipeline</button>
+  </nav>
+
+  <!-- one filter row scopes every chart on the sales & segment tabs -->
+  <form class="filters" id="filters" autocomplete="off">
+    <label>Period
+      <select name="preset">
+        <option value="12m">Last 12 months</option>
+        <option value="ytd">Year to date</option>
+        <option value="q">Last quarter</option>
+        <option value="all">All time</option>
+        <option value="custom">Custom…</option>
+      </select>
+    </label>
+    <label>From <input type="date" name="start"></label>
+    <label>To <input type="date" name="end"></label>
+    <label>Region <select name="region"><option value="">All regions</option></select></label>
+    <label>Channel <select name="channel"><option value="">All channels</option></select></label>
+    <label>Category <select name="category"><option value="">All categories</option></select></label>
+    <label>Segment <select name="segment"><option value="">All segments</option></select></label>
+    <button class="icon reset" type="button" id="reset">Reset</button>
+    <span class="hint" id="filter-hint"></span>
+  </form>
+
+  <!-- ============================================================ OVERVIEW -->
+  <section data-panel="overview">
+    <div class="kpis" id="kpis"></div>
+    <div class="grid">
+      <div class="card span-8">
+        <h2>Monthly net revenue and profit</h2>
+        <p class="desc">Returns excluded. Hover for values.</p>
+        <div class="legend"><span><i style="background:var(--s1)"></i>Net revenue</span><span><i style="background:var(--s2)"></i>Profit</span></div>
+        <div class="chart-box"><canvas id="trend-chart"></canvas></div>
+      </div>
+      <div class="card span-4">
+        <h2>Revenue by category</h2>
+        <p class="desc">Net revenue in the selected slice</p>
+        <div class="chart-box"><canvas id="cat-chart"></canvas></div>
+      </div>
+      <div class="card span-4">
+        <h2>Revenue by region</h2>
+        <p class="desc">Store region; online sales use the customer's region</p>
+        <div class="chart-box short"><canvas id="region-chart"></canvas></div>
+      </div>
+      <div class="card span-4">
+        <h2>Revenue by channel</h2>
+        <p class="desc">Retail stores, web store, mobile app</p>
+        <div class="chart-box short"><canvas id="channel-chart"></canvas></div>
+      </div>
+      <div class="card span-4">
+        <h2>Revenue by customer age</h2>
+        <p class="desc">Age band at load time</p>
+        <div class="chart-box short"><canvas id="age-chart"></canvas></div>
+      </div>
+      <div class="card span-12">
+        <h2>Top products</h2>
+        <p class="desc">By net revenue in the selected slice</p>
+        <div class="table-wrap"><table id="top-products"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ CUSTOMERS -->
+  <section data-panel="customers" hidden>
+    <div class="grid">
+      <div class="card span-12">
+        <h2>RFM segments (K-Means)</h2>
+        <p class="desc" id="seg-model-desc">Customers clustered on log recency, frequency and monetary value. Revenue columns respect the filters above.</p>
+        <div class="table-wrap"><table id="seg-table"></table></div>
+      </div>
+      <div class="card span-7">
+        <h2>Share of customers vs share of revenue</h2>
+        <p class="desc">Lifetime value from the model. A small segment with a long revenue bar is where the money is.</p>
+        <div class="legend"><span><i class="box" style="background:var(--s1)"></i>Share of customers</span><span><i class="box" style="background:var(--s2)"></i>Share of revenue</span></div>
+        <div class="chart-box"><canvas id="seg-chart"></canvas></div>
+      </div>
+      <div class="card span-5">
+        <h2>Recency × frequency grid</h2>
+        <p class="desc">Average lifetime value per RFM score cell (5 = most recent / most frequent). Hover for counts.</p>
+        <div id="rfm-heat"></div>
+      </div>
+      <div class="card span-12">
+        <h2 id="seg-cust-title">Top customers in segment</h2>
+        <p class="desc">Click a segment row above to switch</p>
+        <div class="table-wrap"><table id="seg-customers"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ FORECAST -->
+  <section data-panel="forecast" hidden>
+    <div class="grid">
+      <div class="card span-12">
+        <div class="controls">
+          <label>Series <select id="fc-series"></select></label>
+        </div>
+        <h2>Monthly net revenue: actuals and 6-month forecast</h2>
+        <p class="desc">Holt-Winters (damped additive trend, multiplicative yearly seasonality). The shaded band is the 95% interval.</p>
+        <div class="stats" id="fc-stats"></div>
+        <div class="legend"><span><i style="background:var(--s1)"></i>Actual</span><span><i style="background:var(--muted)"></i>Model fit</span><span><i style="background:var(--s2)"></i>Forecast</span><span><i class="box" style="background:var(--band)"></i>95% interval</span></div>
+        <div class="chart-box tall"><canvas id="fc-chart"></canvas></div>
+      </div>
+      <div class="card span-12">
+        <h2>Forecast table</h2>
+        <div class="table-wrap"><table id="fc-table"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ BASKET -->
+  <section data-panel="basket" hidden>
+    <div class="grid">
+      <div class="card span-12">
+        <h2>Association rules (FP-Growth)</h2>
+        <p class="desc" id="rules-desc">“Customers who bought X also bought Y.” Lift above 1 means the items appear together more often than chance.</p>
+        <div class="controls">
+          <label>Level <select id="r-level"><option value="product">Product</option><option value="subcategory">Subcategory</option></select></label>
+          <label>Category <select id="r-category"><option value="">All</option></select></label>
+          <label>Min lift <output id="r-lift-out">2.0</output><input type="range" id="r-lift" min="1" max="20" step="0.5" value="2"></label>
+          <label>Min confidence <output id="r-conf-out">20%</output><input type="range" id="r-conf" min="0.05" max="0.9" step="0.05" value="0.2"></label>
+          <label>Item search <input type="search" id="r-item" placeholder="e.g. Espresso"></label>
+        </div>
+        <div class="stats" id="rules-stats"></div>
+      </div>
+      <div class="card span-5">
+        <h2>Strongest rules by lift</h2>
+        <p class="desc">Top 10 of the current selection</p>
+        <div class="chart-box tall"><canvas id="rules-chart"></canvas></div>
+      </div>
+      <div class="card span-7">
+        <h2>Rules</h2>
+        <p class="desc">Support = share of multi-item baskets containing all items. Confidence = P(then | if).</p>
+        <div class="table-wrap" style="max-height:420px;overflow-y:auto"><table id="rules-table"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ PIPELINE -->
+  <section data-panel="pipeline" hidden>
+    <div class="grid">
+      <div class="card span-12">
+        <h2>Pipeline runs</h2>
+        <p class="desc">Every ETL and mining step writes to dw.etl_run_log</p>
+        <div class="table-wrap"><table id="runs-table"></table></div>
+      </div>
+      <div class="card span-6">
+        <h2>Data quality checks</h2>
+        <p class="desc">Latest result per check (dw.data_quality_checks)</p>
+        <div class="table-wrap"><table id="checks-table"></table></div>
+      </div>
+      <div class="card span-6">
+        <h2>Rejected source rows</h2>
+        <p class="desc">Quarantined in staging.rejected_rows with the reason</p>
+        <div class="table-wrap"><table id="rejects-table"></table></div>
+      </div>
+      <div class="card span-12">
+        <h2>Warehouse tables</h2>
+        <p class="desc">Row counts for the staging, star-schema and mining layers</p>
+        <div class="table-wrap"><table id="tables-table"></table></div>
+      </div>
+    </div>
+  </section>
+</div>
+<div class="tooltip" id="tooltip"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

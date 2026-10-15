@@ -1,0 +1,49 @@
+# Full stack: PostgreSQL warehouse + Airflow (scheduler/UI) + dashboard.
+#   cp .env.example .env      # then set real passwords in .env
+#   docker compose up -d --build
+#   Airflow UI  -> http://localhost:8080  (user: admin, password printed in `docker compose logs airflow`)
+#   Dashboard   -> http://localhost:8000  (basic auth: BI_DASHBOARD_USER / BI_DASHBOARD_PASSWORD)
+#
+# Ports are published on 127.0.0.1 only. Put a TLS reverse proxy in front before exposing anything further.
+services:
+  warehouse:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: bi
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: bi
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: [warehouse-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bi -d bi"]
+      interval: 5s
+      retries: 10
+
+  airflow:
+    build: { context: ., dockerfile: docker/airflow.Dockerfile }
+    command: standalone
+    depends_on:
+      warehouse: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql+psycopg://bi:${POSTGRES_PASSWORD}@warehouse:5432/bi
+      BI_PROJECT_ROOT: /opt/bi
+      BI_PYTHON: /opt/bi-venv/bin/python
+      BI_RAW_DIR: /tmp/bi_raw
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/bi/airflow/dags
+    ports: ["127.0.0.1:8080:8080"]
+    volumes:
+      - ./:/opt/bi:ro          # tasks only read the code; raw files land in BI_RAW_DIR
+
+  dashboard:
+    build: { context: ., dockerfile: docker/Dockerfile }
+    depends_on:
+      warehouse: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql+psycopg://bi:${POSTGRES_PASSWORD}@warehouse:5432/bi
+      BI_DASHBOARD_USER: ${BI_DASHBOARD_USER:-admin}
+      BI_DASHBOARD_PASSWORD: ${BI_DASHBOARD_PASSWORD:?set BI_DASHBOARD_PASSWORD in .env}
+    ports: ["127.0.0.1:8000:8000"]
+
+volumes:
+  warehouse-data:
